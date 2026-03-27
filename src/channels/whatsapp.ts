@@ -5,12 +5,10 @@ import path from 'path';
 import makeWASocket, {
   Browsers,
   DisconnectReason,
-  WAMessageKey,
   WASocket,
   fetchLatestWaWebVersion,
   makeCacheableSignalKeyStore,
   normalizeMessageContent,
-  proto,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 
@@ -31,48 +29,6 @@ import { registerChannel, ChannelOpts } from './registry.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-// Minimal pino-compatible logger adapter for Baileys (requires level, child, trace)
-const baileysLogger = {
-  level: 'silent',
-  trace: () => {},
-  debug: (obj: unknown, msg?: string) =>
-    logger.debug(
-      typeof obj === 'object' && obj !== null
-        ? (obj as Record<string, unknown>)
-        : {},
-      msg ?? String(obj),
-    ),
-  info: (obj: unknown, msg?: string) =>
-    logger.info(
-      typeof obj === 'object' && obj !== null
-        ? (obj as Record<string, unknown>)
-        : {},
-      msg ?? String(obj),
-    ),
-  warn: (obj: unknown, msg?: string) =>
-    logger.warn(
-      typeof obj === 'object' && obj !== null
-        ? (obj as Record<string, unknown>)
-        : {},
-      msg ?? String(obj),
-    ),
-  error: (obj: unknown, msg?: string) =>
-    logger.error(
-      typeof obj === 'object' && obj !== null
-        ? (obj as Record<string, unknown>)
-        : {},
-      msg ?? String(obj),
-    ),
-  fatal: (obj: unknown, msg?: string) =>
-    logger.fatal(
-      typeof obj === 'object' && obj !== null
-        ? (obj as Record<string, unknown>)
-        : {},
-      msg ?? String(obj),
-    ),
-  child: () => baileysLogger,
-};
-
 export interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
@@ -88,10 +44,6 @@ export class WhatsAppChannel implements Channel {
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private groupSyncTimerStarted = false;
-  /** Cache of recently sent messages for retry requests (max 256 entries). */
-  private sentMessageCache = new Map<string, proto.IMessage>();
-  /** Bot's LID user ID (e.g. "80355281346633") for normalizing group mentions. */
-  private botLidUser?: string;
 
   private opts: WhatsAppChannelOpts;
 
@@ -122,23 +74,11 @@ export class WhatsAppChannel implements Channel {
       version,
       auth: {
         creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, baileysLogger),
+        keys: makeCacheableSignalKeyStore(state.keys, logger),
       },
       printQRInTerminal: false,
-      logger: baileysLogger,
+      logger,
       browser: Browsers.macOS('Chrome'),
-      getMessage: async (key: WAMessageKey) => {
-        const cached = this.sentMessageCache.get(key.id || '');
-        if (cached) {
-          logger.debug(
-            { id: key.id },
-            'getMessage: returning cached message for retry',
-          );
-          return cached;
-        }
-        logger.debug({ id: key.id }, 'getMessage: no cached message found');
-        return undefined;
-      },
     });
 
     this.sock.ev.on('connection.update', (update) => {
@@ -198,7 +138,6 @@ export class WhatsAppChannel implements Channel {
           const lidUser = this.sock.user.lid?.split(':')[0];
           if (lidUser && phoneUser) {
             this.lidToPhoneMap[lidUser] = `${phoneUser}@s.whatsapp.net`;
-            this.botLidUser = lidUser;
             logger.debug({ lidUser, phoneUser }, 'LID to phone mapping set');
           }
         }
@@ -244,20 +183,8 @@ export class WhatsAppChannel implements Channel {
           const rawJid = msg.key.remoteJid;
           if (!rawJid || rawJid === 'status@broadcast') continue;
 
-          // Translate LID JID to phone JID if applicable.
-          // Prefer senderPn from the message key (available in newer WA protocol)
-          // since translateJid may fail to resolve LID→phone via signalRepository.
-          let chatJid = await this.translateJid(rawJid);
-          if (chatJid.endsWith('@lid') && (msg.key as any).senderPn) {
-            const pn = (msg.key as any).senderPn as string;
-            const phoneJid = pn.includes('@') ? pn : `${pn}@s.whatsapp.net`;
-            this.lidToPhoneMap[rawJid.split('@')[0].split(':')[0]] = phoneJid;
-            chatJid = phoneJid;
-            logger.info(
-              { lidJid: rawJid, phoneJid },
-              'Translated LID via senderPn',
-            );
-          }
+          // Translate LID JID to phone JID if applicable
+          const chatJid = await this.translateJid(rawJid);
 
           const timestamp = new Date(
             Number(msg.messageTimestamp) * 1000,
@@ -276,21 +203,12 @@ export class WhatsAppChannel implements Channel {
           // Only deliver full message for registered groups
           const groups = this.opts.registeredGroups();
           if (groups[chatJid]) {
-            let content =
+            const content =
               normalized.conversation ||
               normalized.extendedTextMessage?.text ||
               normalized.imageMessage?.caption ||
               normalized.videoMessage?.caption ||
               '';
-
-            // WhatsApp group mentions use the LID in raw text (e.g. "@80355281346633")
-            // instead of the display name. Normalize to @AssistantName for trigger matching.
-            if (this.botLidUser && content.includes(`@${this.botLidUser}`)) {
-              content = content.replace(
-                `@${this.botLidUser}`,
-                `@${ASSISTANT_NAME}`,
-              );
-            }
 
             // Skip protocol messages with no text content (encryption keys, read receipts, etc.)
             if (!content) continue;
@@ -317,16 +235,6 @@ export class WhatsAppChannel implements Channel {
               is_from_me: fromMe,
               is_bot_message: isBotMessage,
             });
-          } else if (chatJid !== rawJid) {
-            // LID translation produced a JID that doesn't match any registered group
-            logger.warn(
-              {
-                rawJid,
-                translatedJid: chatJid,
-                registeredJids: Object.keys(groups),
-              },
-              'Message JID not found in registered groups after translation',
-            );
           }
         } catch (err) {
           logger.error(
@@ -356,15 +264,7 @@ export class WhatsAppChannel implements Channel {
       return;
     }
     try {
-      const sent = await this.sock.sendMessage(jid, { text: prefixed });
-      // Cache for retry requests (recipient may ask us to re-encrypt)
-      if (sent?.key?.id && sent.message) {
-        this.sentMessageCache.set(sent.key.id, sent.message);
-        if (this.sentMessageCache.size > 256) {
-          const oldest = this.sentMessageCache.keys().next().value!;
-          this.sentMessageCache.delete(oldest);
-        }
-      }
+      await this.sock.sendMessage(jid, { text: prefixed });
       logger.info({ jid, length: prefixed.length }, 'Message sent');
     } catch (err) {
       // If send fails, queue it for retry on reconnect
@@ -455,9 +355,7 @@ export class WhatsAppChannel implements Channel {
 
     // Query Baileys' signal repository for the mapping
     try {
-      const pn = await (
-        this.sock.signalRepository as any
-      )?.lidMapping?.getPNForLID(jid);
+      const pn = await this.sock.signalRepository?.lidMapping?.getPNForLID(jid);
       if (pn) {
         const phoneJid = `${pn.split('@')[0].split(':')[0]}@s.whatsapp.net`;
         this.lidToPhoneMap[lidUser] = phoneJid;
@@ -485,10 +383,7 @@ export class WhatsAppChannel implements Channel {
       while (this.outgoingQueue.length > 0) {
         const item = this.outgoingQueue.shift()!;
         // Send directly — queued items are already prefixed by sendMessage
-        const sent = await this.sock.sendMessage(item.jid, { text: item.text });
-        if (sent?.key?.id && sent.message) {
-          this.sentMessageCache.set(sent.key.id, sent.message);
-        }
+        await this.sock.sendMessage(item.jid, { text: item.text });
         logger.info(
           { jid: item.jid, length: item.text.length },
           'Queued message sent',
