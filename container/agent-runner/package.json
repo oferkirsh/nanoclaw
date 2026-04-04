@@ -12,6 +12,9 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.76",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "cron-parser": "^5.0.0",
+    "playwright-core": "^1.50.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "zod": "^4.0.0"
   },
   "devDependencies": {

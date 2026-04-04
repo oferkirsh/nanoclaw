@@ -337,6 +337,157 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+server.tool(
+  'get_family_screentime',
+  `Get Screen Time usage data for a family member. Returns today's app usage including total time, categories, and per-app breakdown. This runs on the host Mac via UI automation, so it takes ~10 seconds.`,
+  {
+    member: z.string().default('noam kirshenbaum').describe('Family member name. Available: "ofer kirshenbaum", "Omer Kirshenbaum", "Ori Kirshenbaum", "noam kirshenbaum"'),
+  },
+  async (args) => {
+    const requestId = `st-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const data = {
+      type: 'family_screentime',
+      member: args.member,
+      requestId,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    // Poll for the response file (host writes it after running the script)
+    const responsePath = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+    const maxWait = 30_000;
+    const pollInterval = 1_000;
+    const start = Date.now();
+
+    while (Date.now() - start < maxWait) {
+      if (fs.existsSync(responsePath)) {
+        try {
+          const response = JSON.parse(fs.readFileSync(responsePath, 'utf-8'));
+          fs.unlinkSync(responsePath);
+
+          if (response.error) {
+            return {
+              content: [{ type: 'text' as const, text: `Error getting screen time: ${response.error}` }],
+              isError: true,
+            };
+          }
+
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(response.result, null, 2) }],
+          };
+        } catch (err) {
+          return {
+            content: [{ type: 'text' as const, text: `Error reading response: ${err instanceof Error ? err.message : String(err)}` }],
+            isError: true,
+          };
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: 'Timed out waiting for screen time data. The host script may still be running — try again in a moment.' }],
+      isError: true,
+    };
+  },
+);
+
+server.tool(
+  'smartschool_fetch',
+  `Access the SmartSchool school portal (webtop.smartschool.co.il). Handles login with reCAPTCHA v2 and persists the session so you only need to login once.
+
+Actions:
+- login: Authenticate with username + password. Handles reCAPTCHA checkbox automatically. Pass save_credentials=true to store them for auto-login on session expiry.
+- fetch: Fetch any SmartSchool page using the saved session. Returns the page's visible text content. Provide a path (e.g. "/grades", "/schedule") or a full URL.
+
+Session is saved to the group folder and reused across container runs. If the session expires, re-run login.
+
+If reCAPTCHA fails (image challenge appears instead of auto-passing), the login will report failure. In that case you can ask the user to provide a 2captcha API key for reliable solving.`,
+  {
+    action: z.enum(['login', 'fetch']).describe(
+      'login: authenticate and save session | fetch: get page content using saved session',
+    ),
+    url: z.string().optional().describe(
+      'Page path or full URL to fetch — required for fetch action (e.g. "/", "/grades", "/schedule")',
+    ),
+    username: z.string().optional().describe(
+      'SmartSchool username — required for login action',
+    ),
+    password: z.string().optional().describe(
+      'SmartSchool password — required for login action',
+    ),
+    save_credentials: z.boolean().optional().describe(
+      'Save credentials to group folder so sessions can be automatically renewed (default: false)',
+    ),
+  },
+  async (args) => {
+    const { smartschoolLogin, smartschoolFetch, saveConfig, loadConfig } = await import('./smartschool.js');
+
+    if (args.action === 'login') {
+      if (!args.username || !args.password) {
+        return {
+          content: [{ type: 'text' as const, text: 'username and password are required for the login action' }],
+          isError: true,
+        };
+      }
+
+      if (args.save_credentials) {
+        saveConfig({ username: args.username, password: args.password });
+      }
+
+      const result = await smartschoolLogin(args.username, args.password);
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+        isError: !result.success,
+      };
+    }
+
+    if (args.action === 'fetch') {
+      if (!args.url) {
+        return {
+          content: [{ type: 'text' as const, text: 'url is required for the fetch action' }],
+          isError: true,
+        };
+      }
+
+      let result = await smartschoolFetch(args.url);
+
+      // Session expired — attempt auto-login with saved credentials
+      if (result.sessionExpired) {
+        const config = loadConfig();
+        if (config) {
+          const loginResult = await smartschoolLogin(config.username, config.password);
+          if (loginResult.success) {
+            result = await smartschoolFetch(args.url);
+          }
+        }
+
+        if (result.sessionExpired) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: 'Session expired and no saved credentials found. Please run smartschool_fetch with action=login and save_credentials=true.',
+            }],
+            isError: true,
+          };
+        }
+      }
+
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      };
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: 'Unknown action' }],
+      isError: true,
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

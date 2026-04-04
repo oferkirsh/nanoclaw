@@ -1,5 +1,7 @@
+import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 import { CronExpressionParser } from 'cron-parser';
 
@@ -166,6 +168,9 @@ export async function processTaskIpc(
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
+    // For family_screentime
+    member?: string;
+    requestId?: string;
     // For register_group
     jid?: string;
     name?: string;
@@ -461,6 +466,57 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'family_screentime': {
+      const member = data.member || 'noam kirshenbaum';
+      const requestId = data.requestId;
+      if (!requestId) {
+        logger.warn('family_screentime missing requestId');
+        break;
+      }
+
+      // Resolve script path relative to this file (src/ipc.ts → scripts/family-screentime.sh)
+      const scriptDir = path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '..',
+        'scripts',
+      );
+      const scriptPath = path.join(scriptDir, 'family-screentime.sh');
+
+      if (!fs.existsSync(scriptPath)) {
+        logger.error({ scriptPath }, 'family-screentime.sh not found');
+        break;
+      }
+
+      // Run the host-side script and write the result back
+      const responseDir = path.join(
+        DATA_DIR,
+        'ipc',
+        sourceGroup,
+        'responses',
+      );
+      fs.mkdirSync(responseDir, { recursive: true });
+      const responsePath = path.join(responseDir, `${requestId}.json`);
+
+      execFile('bash', [scriptPath, member], { timeout: 30_000 }, (err, stdout, stderr) => {
+        let responseData: object;
+        if (err) {
+          logger.error({ err, stderr }, 'family-screentime.sh failed');
+          responseData = { requestId, error: stderr || err.message };
+        } else {
+          try {
+            responseData = { requestId, result: JSON.parse(stdout) };
+          } catch {
+            responseData = { requestId, result: stdout.trim() };
+          }
+        }
+        const tempPath = `${responsePath}.tmp`;
+        fs.writeFileSync(tempPath, JSON.stringify(responseData, null, 2));
+        fs.renameSync(tempPath, responsePath);
+        logger.info({ requestId, member }, 'Family screentime response written');
+      });
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
