@@ -742,7 +742,8 @@ async function main(): Promise<void> {
 
         let wrote = false;
         for (const event of pending) {
-          if (!event.synced || !event.gcal_id || event.transport_enriched) continue;
+          if (!event.synced || !event.gcal_id || event.transport_enriched)
+            continue;
 
           upsertCalendarEvent({
             id: event.gcal_id,
@@ -750,7 +751,8 @@ async function main(): Promise<void> {
             start_time: event.start,
             end_time: event.end,
             person: event.person as 'ori' | 'noam' | 'omer' | 'family',
-            calendar_id: 'f028f40d56c7e321519c4fe3c256776970e044dcad91414214c9783e10c685cf@group.calendar.google.com',
+            calendar_id:
+              'f028f40d56c7e321519c4fe3c256776970e044dcad91414214c9783e10c685cf@group.calendar.google.com',
             address: event.address ?? null,
             color_synced_at: null,
             walk_minutes: null,
@@ -764,7 +766,10 @@ async function main(): Promise<void> {
           await enrichCalendarEvent(event.gcal_id, sendMessageForAlerts);
           event.transport_enriched = true;
           wrote = true;
-          logger.info({ eventId: event.gcal_id, title: event.title }, 'Calendar event enriched');
+          logger.info(
+            { eventId: event.gcal_id, title: event.title },
+            'Calendar event enriched',
+          );
         }
 
         if (wrote) {

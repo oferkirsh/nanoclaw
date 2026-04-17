@@ -259,8 +259,13 @@ async function buildContainerArgs(
 
   // Inject Google Calendar service account key if present
   if (fs.existsSync(GCAL_SA_KEY_PATH)) {
-    args.push(...readonlyMountArgs(GCAL_SA_KEY_PATH, GCAL_SA_KEY_CONTAINER_PATH));
-    args.push('-e', `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=${GCAL_SA_KEY_CONTAINER_PATH}`);
+    args.push(
+      ...readonlyMountArgs(GCAL_SA_KEY_PATH, GCAL_SA_KEY_CONTAINER_PATH),
+    );
+    args.push(
+      '-e',
+      `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=${GCAL_SA_KEY_CONTAINER_PATH}`,
+    );
   }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.

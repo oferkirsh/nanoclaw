@@ -186,9 +186,7 @@ function createSchema(database: Database.Database): void {
   ];
   for (const [col, def] of transportCols) {
     try {
-      database.exec(
-        `ALTER TABLE calendar_events ADD COLUMN ${col} ${def}`,
-      );
+      database.exec(`ALTER TABLE calendar_events ADD COLUMN ${col} ${def}`);
     } catch {
       /* column already exists */
     }
@@ -839,15 +837,16 @@ export function getAllCalendarEvents(): CalendarEvent[] {
 }
 
 export function markCalendarEventSynced(id: string): void {
-  db.prepare(
-    `UPDATE calendar_events SET color_synced_at = ? WHERE id = ?`,
-  ).run(new Date().toISOString(), id);
+  db.prepare(`UPDATE calendar_events SET color_synced_at = ? WHERE id = ?`).run(
+    new Date().toISOString(),
+    id,
+  );
 }
 
 export function getCalendarEventById(id: string): CalendarEvent | undefined {
-  return db
-    .prepare(`SELECT * FROM calendar_events WHERE id = ?`)
-    .get(id) as CalendarEvent | undefined;
+  return db.prepare(`SELECT * FROM calendar_events WHERE id = ?`).get(id) as
+    | CalendarEvent
+    | undefined;
 }
 
 export function updateCalendarEventTransport(
@@ -875,12 +874,8 @@ export function updateCalendarEventTransport(
 }
 
 export function getPendingRideAlerts(): CalendarEvent[] {
-  const windowStart = new Date(
-    Date.now() + 47 * 60 * 60 * 1000,
-  ).toISOString();
-  const windowEnd = new Date(
-    Date.now() + 49 * 60 * 60 * 1000,
-  ).toISOString();
+  const windowStart = new Date(Date.now() + 47 * 60 * 60 * 1000).toISOString();
+  const windowEnd = new Date(Date.now() + 49 * 60 * 60 * 1000).toISOString();
   return db
     .prepare(
       `SELECT * FROM calendar_events
@@ -893,9 +888,9 @@ export function getPendingRideAlerts(): CalendarEvent[] {
 }
 
 export function markRideAlertSent(id: string): void {
-  db.prepare(
-    `UPDATE calendar_events SET ride_alert_sent = 1 WHERE id = ?`,
-  ).run(id);
+  db.prepare(`UPDATE calendar_events SET ride_alert_sent = 1 WHERE id = ?`).run(
+    id,
+  );
 }
 
 export function getCalendarEventsNeedingEnrichment(): CalendarEvent[] {

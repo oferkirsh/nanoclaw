@@ -37,7 +37,11 @@ const DEFAULT_SCHOOL_END_TIME = '15:00';
 
 // Resolve gws at module load time
 let gwsBin: string | null = null;
-for (const p of ['/opt/homebrew/bin/gws', '/usr/local/bin/gws', '/usr/bin/gws']) {
+for (const p of [
+  '/opt/homebrew/bin/gws',
+  '/usr/local/bin/gws',
+  '/usr/bin/gws',
+]) {
   if (fs.existsSync(p)) {
     gwsBin = p;
     break;
@@ -154,7 +158,10 @@ function patchCalendarEventDescription(
   const env = { ...process.env };
   if (!env.GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE) {
     env.GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE = path.join(
-      os.homedir(), '.config', 'nanoclaw', 'gcal-sa-key.json',
+      os.homedir(),
+      '.config',
+      'nanoclaw',
+      'gcal-sa-key.json',
     );
   }
   try {
@@ -228,7 +235,8 @@ export async function enrichCalendarEvent(
       )
     : 'home';
 
-  const { minutes, km } = origin === 'school' && fromSchool ? fromSchool : fromHome;
+  const { minutes, km } =
+    origin === 'school' && fromSchool ? fromSchool : fromHome;
   const transportMode = determineTransportMode(minutes, event.start_time);
 
   updateCalendarEventTransport(eventId, {
@@ -244,7 +252,12 @@ export async function enrichCalendarEvent(
   );
 
   // Update Google Calendar event description
-  const transportLine = buildTransportDescription(transportMode, minutes, km, origin);
+  const transportLine = buildTransportDescription(
+    transportMode,
+    minutes,
+    km,
+    origin,
+  );
   patchCalendarEventDescription(eventId, transportLine);
 }
 
@@ -275,7 +288,12 @@ export async function resolveVenueAddress(
   };
 
   if (data.status !== 'OK' || !data.results.length) {
-    await sendClarificationRequest(venueName, eventTitle, eventDate, sendMessage);
+    await sendClarificationRequest(
+      venueName,
+      eventTitle,
+      eventDate,
+      sendMessage,
+    );
     return null;
   }
 

@@ -7,8 +7,17 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask, upsertCalendarEvent } from './db.js';
-import { enrichCalendarEvent, resolveVenueAddress } from './transport-enricher.js';
+import {
+  createTask,
+  deleteTask,
+  getTaskById,
+  updateTask,
+  upsertCalendarEvent,
+} from './db.js';
+import {
+  enrichCalendarEvent,
+  resolveVenueAddress,
+} from './transport-enricher.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -579,7 +588,10 @@ export async function processTaskIpc(
         // Trigger transport enrichment async — don't block IPC processing
         if (resolvedAddress) {
           enrichCalendarEvent(data.id, deps.sendMessage).catch((err) =>
-            logger.error({ err, eventId: data.id }, 'Transport enrichment failed'),
+            logger.error(
+              { err, eventId: data.id },
+              'Transport enrichment failed',
+            ),
           );
         }
       } else {
