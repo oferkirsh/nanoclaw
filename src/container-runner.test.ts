@@ -13,6 +13,7 @@ vi.mock('./config.js', () => ({
   CONTAINER_TIMEOUT: 1800000, // 30min
   DATA_DIR: '/tmp/nanoclaw-test-data',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
+  GCAL_SA_KEY_PATH: '/tmp/nanoclaw-test-gcal-sa-key.json',
   IDLE_TIMEOUT: 1800000, // 30min
   ONECLI_API_KEY: '',
   ONECLI_URL: 'http://localhost:10254',
