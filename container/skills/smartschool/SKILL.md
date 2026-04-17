@@ -1,6 +1,6 @@
 ---
 name: smartschool
-description: Access the SmartSchool school portal — login, check grades, schedule, messages, and any other page. Handles reCAPTCHA automatically and persists session.
+description: Access the SmartSchool school portal — login, check grades, schedule, messages, and any other page. Handles reCAPTCHA via 2captcha and persists session.
 ---
 
 # SmartSchool Portal Integration
@@ -18,9 +18,21 @@ mcp__nanoclaw__smartschool_fetch(
 )
 ```
 
-Set `save_credentials=true` to store credentials in the group folder — this allows the session to be automatically renewed when it expires (no re-login required).
+Set `save_credentials=true` to store credentials (including the 2captcha key) in `smartschool_config.json` so the session renews automatically when it expires.
 
-The tool handles the reCAPTCHA v2 checkbox automatically using browser stealth settings.
+## reCAPTCHA solving
+
+SmartSchool uses reCAPTCHA v2. Login automatically solves it via **2captcha.com** when `twoCaptchaApiKey` is present in the config. Falls back to a stealth browser click if no key is set (less reliable).
+
+## Config file (`smartschool_config.json`)
+
+```json
+{
+  "username": "...",
+  "password": "...",
+  "twoCaptchaApiKey": "..."
+}
+```
 
 ## Fetching pages
 
@@ -50,10 +62,3 @@ The page text will contain navigation links and menu items. Use those paths for 
 - Session cookies are saved to `smartschool_session.json` in the group folder after every successful login or fetch.
 - If you saved credentials (`save_credentials=true`), the session renews automatically when it expires.
 - To force a re-login (e.g. after a password change), call the login action again.
-
-## If reCAPTCHA fails
-
-If the login reports a reCAPTCHA image challenge failure:
-1. Ask the user if they have a 2captcha API key.
-2. If yes, the key can be used to solve the challenge programmatically.
-3. As a workaround, the user can also log in manually and export their session cookies.

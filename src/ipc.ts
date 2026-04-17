@@ -7,7 +7,8 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { createTask, deleteTask, getTaskById, updateTask, upsertCalendarEvent } from './db.js';
+import { enrichCalendarEvent, resolveVenueAddress } from './transport-enricher.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -178,6 +179,14 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For calendar_event_created
+    id?: string;
+    title?: string;
+    start_time?: string;
+    end_time?: string;
+    person?: string;
+    calendar_id?: string;
+    address?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -518,6 +527,64 @@ export async function processTaskIpc(
           );
         },
       );
+      break;
+    }
+
+    case 'calendar_event_created': {
+      if (
+        data.id &&
+        data.title &&
+        data.start_time &&
+        data.person &&
+        data.calendar_id
+      ) {
+        const person = data.person as 'ori' | 'noam' | 'omer' | 'family';
+        const now = new Date().toISOString();
+        let resolvedAddress = data.address ?? null;
+
+        // If address looks like a venue name (no digits → likely not a street address),
+        // attempt geocoding. If it's already a street address, use it directly.
+        if (resolvedAddress && !/\d/.test(resolvedAddress)) {
+          const geocoded = await resolveVenueAddress(
+            resolvedAddress,
+            data.title,
+            data.start_time.slice(0, 10),
+            deps.sendMessage,
+          );
+          resolvedAddress = geocoded;
+        }
+
+        upsertCalendarEvent({
+          id: data.id,
+          title: data.title,
+          start_time: data.start_time,
+          end_time: data.end_time ?? null,
+          person,
+          calendar_id: data.calendar_id,
+          color_synced_at: null,
+          created_at: now,
+          address: resolvedAddress,
+          walk_minutes: null,
+          distance_km: null,
+          origin: null,
+          transport_mode: null,
+          ride_alert_sent: 0,
+        });
+
+        logger.info(
+          { eventId: data.id, title: data.title, address: resolvedAddress },
+          'Calendar event stored via IPC',
+        );
+
+        // Trigger transport enrichment async — don't block IPC processing
+        if (resolvedAddress) {
+          enrichCalendarEvent(data.id, deps.sendMessage).catch((err) =>
+            logger.error({ err, eventId: data.id }, 'Transport enrichment failed'),
+          );
+        }
+      } else {
+        logger.warn({ data }, 'calendar_event_created missing required fields');
+      }
       break;
     }
 

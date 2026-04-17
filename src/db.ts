@@ -82,6 +82,23 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT,
+      person TEXT NOT NULL,
+      calendar_id TEXT NOT NULL,
+      color_synced_at TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS school_schedule_cache (
+      date TEXT PRIMARY KEY,
+      end_time TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -149,17 +166,32 @@ function createSchema(database: Database.Database): void {
 
   // Add reply context columns if they don't exist (migration for existing DBs)
   try {
-    database.exec(
-      `ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT`,
-    );
+    database.exec(`ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT`);
     database.exec(
       `ALTER TABLE messages ADD COLUMN reply_to_message_content TEXT`,
     );
-    database.exec(
-      `ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`,
-    );
+    database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
   } catch {
     /* columns already exist */
+  }
+
+  // Add transport enrichment columns to calendar_events (migration for existing DBs)
+  const transportCols: [string, string][] = [
+    ['address', 'TEXT'],
+    ['walk_minutes', 'INTEGER'],
+    ['distance_km', 'REAL'],
+    ['origin', 'TEXT'],
+    ['transport_mode', 'TEXT'],
+    ['ride_alert_sent', 'INTEGER DEFAULT 0'],
+  ];
+  for (const [col, def] of transportCols) {
+    try {
+      database.exec(
+        `ALTER TABLE calendar_events ADD COLUMN ${col} ${def}`,
+      );
+    } catch {
+      /* column already exists */
+    }
   }
 }
 
@@ -753,4 +785,141 @@ function migrateJsonState(): void {
       }
     }
   }
+}
+
+// --- Calendar events accessors ---
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  start_time: string;
+  end_time: string | null;
+  person: 'ori' | 'noam' | 'omer' | 'family';
+  calendar_id: string;
+  color_synced_at: string | null;
+  created_at: string;
+  address: string | null;
+  walk_minutes: number | null;
+  distance_km: number | null;
+  origin: 'home' | 'school' | null;
+  transport_mode: 'walk' | 'bus' | 'ride' | null;
+  ride_alert_sent: number;
+}
+
+export function upsertCalendarEvent(event: CalendarEvent): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO calendar_events
+     (id, title, start_time, end_time, person, calendar_id, color_synced_at, created_at, address)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    event.id,
+    event.title,
+    event.start_time,
+    event.end_time ?? null,
+    event.person,
+    event.calendar_id,
+    event.color_synced_at ?? null,
+    event.created_at,
+    event.address ?? null,
+  );
+}
+
+export function getUnsyncedCalendarEvents(): CalendarEvent[] {
+  return db
+    .prepare(
+      `SELECT * FROM calendar_events WHERE color_synced_at IS NULL ORDER BY created_at`,
+    )
+    .all() as CalendarEvent[];
+}
+
+export function getAllCalendarEvents(): CalendarEvent[] {
+  return db
+    .prepare(`SELECT * FROM calendar_events ORDER BY created_at`)
+    .all() as CalendarEvent[];
+}
+
+export function markCalendarEventSynced(id: string): void {
+  db.prepare(
+    `UPDATE calendar_events SET color_synced_at = ? WHERE id = ?`,
+  ).run(new Date().toISOString(), id);
+}
+
+export function getCalendarEventById(id: string): CalendarEvent | undefined {
+  return db
+    .prepare(`SELECT * FROM calendar_events WHERE id = ?`)
+    .get(id) as CalendarEvent | undefined;
+}
+
+export function updateCalendarEventTransport(
+  id: string,
+  transport: {
+    address?: string;
+    walk_minutes: number | null;
+    distance_km: number | null;
+    origin: 'home' | 'school' | null;
+    transport_mode: 'walk' | 'bus' | 'ride' | null;
+  },
+): void {
+  db.prepare(
+    `UPDATE calendar_events
+     SET address = ?, walk_minutes = ?, distance_km = ?, origin = ?, transport_mode = ?
+     WHERE id = ?`,
+  ).run(
+    transport.address ?? null,
+    transport.walk_minutes,
+    transport.distance_km,
+    transport.origin,
+    transport.transport_mode,
+    id,
+  );
+}
+
+export function getPendingRideAlerts(): CalendarEvent[] {
+  const windowStart = new Date(
+    Date.now() + 47 * 60 * 60 * 1000,
+  ).toISOString();
+  const windowEnd = new Date(
+    Date.now() + 49 * 60 * 60 * 1000,
+  ).toISOString();
+  return db
+    .prepare(
+      `SELECT * FROM calendar_events
+       WHERE transport_mode = 'ride'
+         AND ride_alert_sent = 0
+         AND start_time >= ?
+         AND start_time <= ?`,
+    )
+    .all(windowStart, windowEnd) as CalendarEvent[];
+}
+
+export function markRideAlertSent(id: string): void {
+  db.prepare(
+    `UPDATE calendar_events SET ride_alert_sent = 1 WHERE id = ?`,
+  ).run(id);
+}
+
+export function getCalendarEventsNeedingEnrichment(): CalendarEvent[] {
+  return db
+    .prepare(
+      `SELECT * FROM calendar_events
+       WHERE transport_mode IS NULL
+         AND address IS NOT NULL`,
+    )
+    .all() as CalendarEvent[];
+}
+
+// --- School schedule cache ---
+
+export function upsertSchoolSchedule(date: string, endTime: string): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO school_schedule_cache (date, end_time, updated_at)
+     VALUES (?, ?, ?)`,
+  ).run(date, endTime, new Date().toISOString());
+}
+
+export function getSchoolSchedule(date: string): string | null {
+  const row = db
+    .prepare(`SELECT end_time FROM school_schedule_cache WHERE date = ?`)
+    .get(date) as { end_time: string } | undefined;
+  return row?.end_time ?? null;
 }

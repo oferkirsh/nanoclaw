@@ -11,6 +11,8 @@ import {
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
   DATA_DIR,
+  GCAL_SA_KEY_CONTAINER_PATH,
+  GCAL_SA_KEY_PATH,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   ONECLI_URL,
@@ -249,6 +251,17 @@ async function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Pass 2captcha API key for SmartSchool reCAPTCHA solving
+  if (process.env.TWO_CAPTCHA_API_KEY) {
+    args.push('-e', `TWO_CAPTCHA_API_KEY=${process.env.TWO_CAPTCHA_API_KEY}`);
+  }
+
+  // Inject Google Calendar service account key if present
+  if (fs.existsSync(GCAL_SA_KEY_PATH)) {
+    args.push(...readonlyMountArgs(GCAL_SA_KEY_PATH, GCAL_SA_KEY_CONTAINER_PATH));
+    args.push('-e', `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=${GCAL_SA_KEY_CONTAINER_PATH}`);
+  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.

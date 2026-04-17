@@ -50,11 +50,17 @@ server.tool(
       .describe(
         'Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.',
       ),
+    target_jid: z
+      .string()
+      .optional()
+      .describe(
+        'Send to a different group by JID instead of the current group. Use this to cross-post to another group (e.g. forwarding parent-relevant alerts to the main group).',
+      ),
   },
   async (args) => {
     const data: Record<string, string | undefined> = {
       type: 'message',
-      chatJid,
+      chatJid: args.target_jid || chatJid,
       text: args.text,
       sender: args.sender || undefined,
       groupFolder,
@@ -563,15 +569,13 @@ server.tool(
 
 server.tool(
   'smartschool_fetch',
-  `Access the SmartSchool school portal (webtop.smartschool.co.il). Handles login with reCAPTCHA v2 and persists the session so you only need to login once.
+  `Access the SmartSchool school portal (webtop.smartschool.co.il). Handles login with reCAPTCHA v2 (solved via 2captcha) and persists the session so you only need to login once.
 
 Actions:
-- login: Authenticate with username + password. Handles reCAPTCHA checkbox automatically. Pass save_credentials=true to store them for auto-login on session expiry.
+- login: Authenticate with username + password. Solves reCAPTCHA via 2captcha if a key is configured. Pass save_credentials=true to store credentials for auto-login on session expiry.
 - fetch: Fetch any SmartSchool page using the saved session. Returns the page's visible text content. Provide a path (e.g. "/grades", "/schedule") or a full URL.
 
-Session is saved to the group folder and reused across container runs. If the session expires, re-run login.
-
-If reCAPTCHA fails (image challenge appears instead of auto-passing), the login will report failure. In that case you can ask the user to provide a 2captcha API key for reliable solving.`,
+Session is saved to the group folder and reused across container runs. If the session expires, login is retried automatically using saved credentials.`,
   {
     action: z.enum(['login', 'fetch']).describe(
       'login: authenticate and save session | fetch: get page content using saved session',
@@ -585,8 +589,11 @@ If reCAPTCHA fails (image challenge appears instead of auto-passing), the login 
     password: z.string().optional().describe(
       'SmartSchool password — required for login action',
     ),
+    two_captcha_api_key: z.string().optional().describe(
+      '2captcha.com API key for solving reCAPTCHA — if provided with save_credentials=true, stored in config for future logins',
+    ),
     save_credentials: z.boolean().optional().describe(
-      'Save credentials to group folder so sessions can be automatically renewed (default: false)',
+      'Save credentials (and 2captcha key if provided) to group folder so sessions renew automatically (default: false)',
     ),
   },
   async (args) => {
@@ -601,10 +608,15 @@ If reCAPTCHA fails (image challenge appears instead of auto-passing), the login 
       }
 
       if (args.save_credentials) {
-        saveConfig({ username: args.username, password: args.password });
+        saveConfig({
+          username: args.username,
+          password: args.password,
+          ...(args.two_captcha_api_key ? { twoCaptchaApiKey: args.two_captcha_api_key } : {}),
+        });
       }
 
-      const result = await smartschoolLogin(args.username, args.password);
+      const apiKey = args.two_captcha_api_key ?? loadConfig()?.twoCaptchaApiKey ?? process.env.TWO_CAPTCHA_API_KEY;
+      const result = await smartschoolLogin(args.username, args.password, apiKey);
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
         isError: !result.success,
@@ -625,7 +637,7 @@ If reCAPTCHA fails (image challenge appears instead of auto-passing), the login 
       if (result.sessionExpired) {
         const config = loadConfig();
         if (config) {
-          const loginResult = await smartschoolLogin(config.username, config.password);
+          const loginResult = await smartschoolLogin(config.username, config.password, config.twoCaptchaApiKey ?? process.env.TWO_CAPTCHA_API_KEY);
           if (loginResult.success) {
             result = await smartschoolFetch(args.url);
           }

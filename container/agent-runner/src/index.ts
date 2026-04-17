@@ -497,7 +497,53 @@ async function runQuery(
       message.type === 'system'
         ? `system/${(message as { subtype?: string }).subtype}`
         : message.type;
-    log(`[msg #${messageCount}] type=${msgType}`);
+
+    // Log meaningful content from assistant messages
+    if (message.type === 'assistant') {
+      const assistantMsg = message as {
+        uuid?: string;
+        message?: { content?: Array<{ type: string; text?: string; name?: string; input?: Record<string, unknown> }> };
+      };
+      if (assistantMsg.uuid) lastAssistantUuid = assistantMsg.uuid;
+      const content = assistantMsg.message?.content ?? [];
+      for (const block of content) {
+        if (block.type === 'text' && block.text?.trim()) {
+          log(`[msg #${messageCount}] text: ${block.text.slice(0, 120).replace(/\n/g, ' ')}`);
+        } else if (block.type === 'tool_use') {
+          const inputSummary = block.input
+            ? Object.entries(block.input)
+                .slice(0, 3)
+                .map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 60)}`)
+                .join(', ')
+            : '';
+          log(`[msg #${messageCount}] tool_use: ${block.name}(${inputSummary})`);
+        }
+      }
+      if (content.length === 0) {
+        log(`[msg #${messageCount}] type=${msgType}`);
+      }
+    } else if (message.type === 'user') {
+      // Tool results
+      const userMsg = message as {
+        message?: { content?: Array<{ type: string; tool_use_id?: string; content?: string | Array<{ text?: string }> }> };
+      };
+      const content = userMsg.message?.content ?? [];
+      for (const block of content) {
+        if (block.type === 'tool_result') {
+          const resultText = typeof block.content === 'string'
+            ? block.content
+            : Array.isArray(block.content)
+              ? block.content.map(c => c.text ?? '').join('').slice(0, 120)
+              : '';
+          if (resultText) log(`[msg #${messageCount}] tool_result: ${resultText.replace(/\n/g, ' ').slice(0, 120)}`);
+        }
+      }
+      if (content.filter(b => b.type === 'tool_result').length === 0) {
+        log(`[msg #${messageCount}] type=${msgType}`);
+      }
+    } else {
+      log(`[msg #${messageCount}] type=${msgType}`);
+    }
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;

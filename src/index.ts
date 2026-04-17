@@ -62,6 +62,9 @@ import {
   shouldDropMessage,
 } from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { checkAndSendRideAlerts } from './ride-alert.js';
+import { enrichCalendarEvent } from './transport-enricher.js';
+import { upsertCalendarEvent } from './db.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -693,6 +696,87 @@ async function main(): Promise<void> {
     logger.fatal('No channels connected');
     process.exit(1);
   }
+
+  // Ride alert loop — runs on the same interval as the scheduler
+  const sendMessageForAlerts = async (jid: string, rawText: string) => {
+    const channel = findChannel(channels, jid);
+    if (!channel) {
+      logger.warn({ jid }, 'No channel owns JID, cannot send ride alert');
+      return;
+    }
+    const text = formatOutbound(rawText);
+    if (text) await channel.sendMessage(jid, text);
+  };
+  const rideAlertLoop = async () => {
+    try {
+      await checkAndSendRideAlerts(sendMessageForAlerts);
+    } catch (err) {
+      logger.error({ err }, 'Error in ride alert loop');
+    }
+    setTimeout(rideAlertLoop, 60_000);
+  };
+  rideAlertLoop();
+
+  // Calendar sync loop: reads calendar_pending.json from the claw-noam group folder,
+  // upserts newly synced events into the DB, and triggers transport enrichment.
+  const calendarSyncLoop = async () => {
+    try {
+      const pendingFile = path.join(
+        GROUPS_DIR,
+        'whatsapp_claw-noam',
+        'calendar_pending.json',
+      );
+      if (fs.existsSync(pendingFile)) {
+        const pending: Array<{
+          id: string;
+          title: string;
+          start: string;
+          end: string;
+          description?: string;
+          address?: string;
+          person: string;
+          synced: boolean;
+          gcal_id?: string;
+          transport_enriched?: boolean;
+        }> = JSON.parse(fs.readFileSync(pendingFile, 'utf-8'));
+
+        let wrote = false;
+        for (const event of pending) {
+          if (!event.synced || !event.gcal_id || event.transport_enriched) continue;
+
+          upsertCalendarEvent({
+            id: event.gcal_id,
+            title: event.title,
+            start_time: event.start,
+            end_time: event.end,
+            person: event.person as 'ori' | 'noam' | 'omer' | 'family',
+            calendar_id: 'f028f40d56c7e321519c4fe3c256776970e044dcad91414214c9783e10c685cf@group.calendar.google.com',
+            address: event.address ?? null,
+            color_synced_at: null,
+            walk_minutes: null,
+            distance_km: null,
+            origin: null,
+            transport_mode: null,
+            ride_alert_sent: 0,
+            created_at: new Date().toISOString(),
+          });
+
+          await enrichCalendarEvent(event.gcal_id, sendMessageForAlerts);
+          event.transport_enriched = true;
+          wrote = true;
+          logger.info({ eventId: event.gcal_id, title: event.title }, 'Calendar event enriched');
+        }
+
+        if (wrote) {
+          fs.writeFileSync(pendingFile, JSON.stringify(pending, null, 2));
+        }
+      }
+    } catch (err) {
+      logger.error({ err }, 'Error in calendar sync loop');
+    }
+    setTimeout(calendarSyncLoop, 600_000);
+  };
+  calendarSyncLoop();
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({

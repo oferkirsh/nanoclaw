@@ -10,6 +10,9 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'ONECLI_URL',
   'TZ',
+  'GOOGLE_MAPS_API_KEY',
+  'FAMILY_CLAW_JID',
+  'WAR_MODE',
 ]);
 
 export const ASSISTANT_NAME =
@@ -37,6 +40,14 @@ export const SENDER_ALLOWLIST_PATH = path.join(
   'nanoclaw',
   'sender-allowlist.json',
 );
+export const GCAL_SA_KEY_PATH = path.join(
+  HOME_DIR,
+  '.config',
+  'nanoclaw',
+  'gcal-sa-key.json',
+);
+// Path where the key is mounted inside the container
+export const GCAL_SA_KEY_CONTAINER_PATH = '/run/secrets/gcal-sa-key.json';
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
@@ -80,6 +91,20 @@ export function getTriggerPattern(trigger?: string): RegExp {
 }
 
 export const TRIGGER_PATTERN = buildTriggerPattern(DEFAULT_TRIGGER);
+
+// Transport enrichment
+// WAR_MODE disables bus recommendations (currently: Israel/USA vs Iran). Set to 'false' in .env to re-enable buses.
+export const WAR_MODE =
+  (process.env.WAR_MODE ?? envConfig.WAR_MODE ?? 'true') !== 'false';
+export const HOME_ADDRESS = 'Kehilat Varsha St 15, Tel Aviv';
+export const NOAM_SCHOOL_ADDRESS = 'Mordechai Namir Rd 81, Tel Aviv-Yafo';
+export const WALK_THRESHOLD_MINUTES = 15;
+export const SCHOOL_TO_ACTIVITY_WINDOW_MINUTES = 90;
+export const RIDE_ALERT_HOURS_BEFORE = 48;
+export const GOOGLE_MAPS_API_KEY =
+  process.env.GOOGLE_MAPS_API_KEY || envConfig.GOOGLE_MAPS_API_KEY || '';
+export const FAMILY_CLAW_JID =
+  process.env.FAMILY_CLAW_JID || envConfig.FAMILY_CLAW_JID || '';
 
 // Timezone for scheduled tasks, message formatting, etc.
 // Validates each candidate is a real IANA identifier before accepting.
