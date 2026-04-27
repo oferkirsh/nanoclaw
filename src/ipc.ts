@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { DATA_DIR, GROUPS_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import {
   createTask,
@@ -196,6 +196,8 @@ export async function processTaskIpc(
     person?: string;
     calendar_id?: string;
     address?: string;
+    // For smartschool_refresh
+    requestedBy?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -597,6 +599,139 @@ export async function processTaskIpc(
       } else {
         logger.warn({ data }, 'calendar_event_created missing required fields');
       }
+      break;
+    }
+
+    case 'classroom_refresh': {
+      // Same shape as smartschool_refresh — any group can request, main does it.
+      const mainEntry = Object.entries(registeredGroups).find(
+        ([, g]) => g.isMain,
+      );
+      if (!mainEntry) {
+        logger.warn(
+          { sourceGroup },
+          'classroom_refresh requested but no main group registered',
+        );
+        break;
+      }
+      const [mainJid, mainGroup] = mainEntry;
+
+      const refreshFile = path.join(
+        GROUPS_DIR,
+        'global',
+        'classroom',
+        'last_refresh.json',
+      );
+      try {
+        const last = JSON.parse(fs.readFileSync(refreshFile, 'utf-8'));
+        if (last.ok && last.at) {
+          const ageMs = Date.now() - new Date(last.at).getTime();
+          if (ageMs >= 0 && ageMs < 15 * 60 * 1000) {
+            logger.info(
+              { sourceGroup, ageMs },
+              'classroom_refresh skipped — recent successful refresh',
+            );
+            break;
+          }
+        }
+      } catch {
+        // No prior refresh file or unreadable — proceed.
+      }
+
+      const now = new Date().toISOString();
+      const taskId = `cr-refresh-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      createTask({
+        id: taskId,
+        group_folder: mainGroup.folder,
+        chat_jid: mainJid,
+        prompt:
+          `Google Classroom refresh requested by ${data.requestedBy || sourceGroup}.\n\n` +
+          `Step 1 — run \`bash /workspace/global/classroom/fetch.sh\`. ` +
+          `That script handles SAML auth and session refresh deterministically; on exit 0 Classroom is loaded in agent-browser and snapshots are at /tmp/cr_dashboard.{html,snap,interactive,png}. If it exits non-zero, report the failure and stop.\n\n` +
+          `Step 2 — extract assignments and course state into /workspace/global/classroom/data.json. ` +
+          `Course URLs are listed in /workspace/global/classroom/credentials.json under the "courses" key — iterate them via agent-browser and pull pending/upcoming assignments. ` +
+          `Use the existing /workspace/extra/.../classroom_last_check.json shape if present (assignments keyed by id, with title/course/published/due/teacher/status). Set fetchedAt to the current UTC ISO timestamp.\n\n` +
+          `Do not message the chat unless something fails. fetch.sh already updates last_refresh.json; do not overwrite it on success.`,
+        script: null,
+        schedule_type: 'once',
+        schedule_value: now,
+        context_mode: 'isolated',
+        next_run: now,
+        status: 'active',
+        created_at: now,
+      });
+      logger.info(
+        { taskId, sourceGroup, requestedBy: data.requestedBy },
+        'Classroom refresh task scheduled for main',
+      );
+      deps.onTasksChanged();
+      break;
+    }
+
+    case 'smartschool_refresh': {
+      // Any registered group can request a refresh; the main agent does the work.
+      const mainEntry = Object.entries(registeredGroups).find(
+        ([, g]) => g.isMain,
+      );
+      if (!mainEntry) {
+        logger.warn(
+          { sourceGroup },
+          'smartschool_refresh requested but no main group registered',
+        );
+        break;
+      }
+      const [mainJid, mainGroup] = mainEntry;
+
+      // Throttle: skip if a successful refresh happened within the last 15 min.
+      const refreshFile = path.join(
+        GROUPS_DIR,
+        'global',
+        'smartschool',
+        'last_refresh.json',
+      );
+      try {
+        const last = JSON.parse(fs.readFileSync(refreshFile, 'utf-8'));
+        if (last.ok && last.at) {
+          const ageMs = Date.now() - new Date(last.at).getTime();
+          if (ageMs >= 0 && ageMs < 15 * 60 * 1000) {
+            logger.info(
+              { sourceGroup, ageMs },
+              'smartschool_refresh skipped — recent successful refresh',
+            );
+            break;
+          }
+        }
+      } catch {
+        // No prior refresh file or unreadable — proceed.
+      }
+
+      const now = new Date().toISOString();
+      const taskId = `ss-refresh-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      createTask({
+        id: taskId,
+        group_folder: mainGroup.folder,
+        chat_jid: mainJid,
+        prompt:
+          `SmartSchool refresh requested by ${data.requestedBy || sourceGroup}.\n\n` +
+          `Step 1 — run \`bash /workspace/global/smartschool/fetch.sh\`. ` +
+          `That script handles session validation and re-login deterministically; on exit 0 the dashboard is loaded in agent-browser and snapshots are at /tmp/ss_dashboard.{html,snap,interactive,png}. If it exits non-zero, report the failure and stop.\n\n` +
+          `Step 2 — extract the dashboard data into the schema of the existing /workspace/global/smartschool/data.json. ` +
+          `Required top-level keys: fetchedAt, student, school, counters{unreadMessages,unreadNotifications}, grades[], msgs[], upcoming_tests[], timetable{<day>: [{period,subject,teacher,room?}]}. ` +
+          `Use agent-browser eval / the saved snapshots to read the rendered DOM. Set fetchedAt to the current UTC ISO timestamp. Write the result back to /workspace/global/smartschool/data.json.\n\n` +
+          `Do not message the chat unless something fails. fetch.sh already updates last_refresh.json; do not overwrite it on success.`,
+        script: null,
+        schedule_type: 'once',
+        schedule_value: now,
+        context_mode: 'isolated',
+        next_run: now,
+        status: 'active',
+        created_at: now,
+      });
+      logger.info(
+        { taskId, sourceGroup, requestedBy: data.requestedBy },
+        'SmartSchool refresh task scheduled for main',
+      );
+      deps.onTasksChanged();
       break;
     }
 
